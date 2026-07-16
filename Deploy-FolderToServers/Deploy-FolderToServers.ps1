@@ -166,10 +166,11 @@ $lvServers.View          = 'Details'
 $lvServers.CheckBoxes    = $true
 $lvServers.FullRowSelect = $true
 $lvServers.GridLines     = $true
-[void]$lvServers.Columns.Add('שם שרת',   130)
-[void]$lvServers.Columns.Add('כתובת',    110)
-[void]$lvServers.Columns.Add('תיאור',    200)
+[void]$lvServers.Columns.Add('שם שרת',   120)
+[void]$lvServers.Columns.Add('כתובת',    100)
+[void]$lvServers.Columns.Add('תיאור',    160)
 [void]$lvServers.Columns.Add('סטטוס',    100)
+[void]$lvServers.Columns.Add('זמן ריצה', 75)
 $Form.Controls.Add($lvServers)
 
 function Add-ServerRow {
@@ -177,7 +178,8 @@ function Add-ServerRow {
     $it = New-Object System.Windows.Forms.ListViewItem($Name)
     [void]$it.SubItems.Add($IP)
     [void]$it.SubItems.Add($Description)
-    [void]$it.SubItems.Add('')
+    [void]$it.SubItems.Add('')   # status
+    [void]$it.SubItems.Add('')   # runtime
     $it.Checked = $Checked
     [void]$lvServers.Items.Add($it)
 }
@@ -483,6 +485,17 @@ $Timer.Add_Tick({
         }
     }
 
+    # --- live runtime per server ---
+    foreach ($j in $script:Jobs) {
+        if ($j.Handle.IsCompleted -and -not $j.EndedAt) { $j.EndedAt = Get-Date }
+        $endRef  = if ($j.EndedAt) { $j.EndedAt } else { Get-Date }
+        $elapsed = $endRef - $j.StartedAt
+        $txt = if ($elapsed.TotalHours -ge 1) { $elapsed.ToString('hh\:mm\:ss') } else { $elapsed.ToString('mm\:ss') }
+        foreach ($i in $lvServers.Items) {
+            if ($i.SubItems[0].Text -eq $j.Server -and $i.SubItems[4].Text -ne $txt) { $i.SubItems[4].Text = $txt }
+        }
+    }
+
     if ($script:Jobs.Count -gt 0 -and -not ($script:Jobs | Where-Object { -not $_.Handle.IsCompleted })) {
         foreach ($j in $script:Jobs) {
             try { $j.PS.EndInvoke($j.Handle) } catch {}
@@ -524,7 +537,7 @@ $btnRun.Add_Click({
 
     $btnRun.Enabled = $false
     $btnRun.Text    = 'Running...'
-    foreach ($i in $lvServers.Items) { $i.SubItems[3].Text = '' }
+    foreach ($i in $lvServers.Items) { $i.SubItems[3].Text = ''; $i.SubItems[4].Text = '' }
 
     # runtime config snapshot from the GUI
     $cfgRun = [pscustomobject]@{
@@ -553,7 +566,7 @@ $btnRun.Add_Click({
         $ps = [powershell]::Create()
         $ps.RunspacePool = $script:RunspacePool
         [void]$ps.AddScript($Worker).AddArgument($srv).AddArgument($cfgRun).AddArgument($Sync)
-        $script:Jobs += [pscustomobject]@{ PS = $ps; Handle = $ps.BeginInvoke(); Server = $srv.Name; Stopped = $false }
+        $script:Jobs += [pscustomobject]@{ PS = $ps; Handle = $ps.BeginInvoke(); Server = $srv.Name; Stopped = $false; StartedAt = (Get-Date); EndedAt = $null }
     }
     $btnStopSrv.Enabled = $true
     $btnStopAll.Enabled = $true
