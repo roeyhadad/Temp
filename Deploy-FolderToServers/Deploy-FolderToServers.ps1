@@ -21,6 +21,7 @@ Add-Type -AssemblyName System.Drawing
 # ---------------------------------------------------------------------
 $ScriptDir  = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ConfigPath = Join-Path $ScriptDir 'DeployTool-Config.json'
+$LogPath    = Join-Path $ScriptDir ('DeployTool_{0}.log' -f (Get-Date -Format 'yyyyMMdd'))
 
 if (-not (Test-Path $ConfigPath)) {
     $defaultConfig = [ordered]@{
@@ -283,6 +284,11 @@ function Write-Log {
     $line = "[{0}] {1}`r`n" -f (Get-Date -Format 'HH:mm:ss'), $Text
     $rtbLog.AppendText($line)
     $rtbLog.ScrollToCaret()
+    # persist to a daily log file next to the script
+    try {
+        $fileLine = "[{0}] {1}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $Text
+        Add-Content -Path $LogPath -Value $fileLine -Encoding UTF8
+    } catch { }
 }
 
 # --- Bottom buttons ----------------------------------------------------
@@ -603,4 +609,5 @@ $Form.Add_FormClosing({
 })
 
 Write-Log "Config loaded from $ConfigPath" ([System.Drawing.Color]::Cyan)
+Write-Log "Log file: $LogPath" ([System.Drawing.Color]::Cyan)
 [void]$Form.ShowDialog()
