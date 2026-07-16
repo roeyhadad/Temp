@@ -1,0 +1,16 @@
+﻿{
+  "SourceFolder": "C:\\Deploy\\wwwroot",
+  "RemoteTargetFolder": "d$\\Webroot\\wwwroot",
+  "BackupFolder": "d$\\backup",
+  "MaxParallel": 5,
+  "RobocopyThreads": 32,
+  "MirrorMode": false,
+  "UseWinRM": true,
+  "Servers": [
+    { "Name": "Server1", "IP": "11.11", "Description": "Prod_Web01", "Checked": false },
+    { "Name": "Server2", "IP": "11.11", "Description": "Prod_Web02", "Checked": true },
+    { "Name": "Server3", "IP": "11.11", "Description": "Prod_Web03", "Checked": true },
+    { "Name": "Server4", "IP": "11.11", "Description": "Prod_Web04", "Checked": true },
+    { "Name": "Server5", "IP": "11.11", "Description": "Prod_Web05", "Checked": true }
+  ]
+}
