@@ -352,43 +352,7 @@ $Worker = {
         $backupName = "${leaf}_${stamp}"
         $mt         = [int]$Cfg.RobocopyThreads
 
-        # ---------- 1) Backup on the remote server ----------
-        if (Test-Path $uncTarget) {
-            Q 'Backup' 'Backing up...' "Starting backup -> $backupRel\$backupName"
-            $backupOk = $false
-
-            if ($Cfg.UseWinRM) {
-                try {
-                    # Kerberos authentication requires a hostname, not an IP address
-                    $rc = Invoke-Command -ComputerName $Server.Name -ErrorAction Stop -ScriptBlock {
-                        param($src, $dst, $threads)
-                        $parent = Split-Path $dst -Parent
-                        if (-not (Test-Path $parent)) { New-Item -ItemType Directory -Path $parent -Force | Out-Null }
-                        robocopy $src $dst /E /MT:$threads /R:1 /W:1 /NP /NFL /NDL /NJH /NJS | Out-Null
-                        return $LASTEXITCODE
-                    } -ArgumentList $localTarget, (Join-Path $localBackup $backupName), $mt
-                    if ($rc -lt 8) {
-                        $backupOk = $true
-                        Q 'Backup' 'Backup done' "Backup completed locally on $($Server.Name) (WinRM disk-to-disk, exit $rc)"
-                    } else {
-                        Q 'Backup' 'Backing up (UNC)...' "Remote robocopy failed (exit $rc), falling back to UNC backup"
-                    }
-                } catch {
-                    Q 'Backup' 'Backing up (UNC)...' "WinRM unavailable ($($_.Exception.Message.Trim())), falling back to UNC backup"
-                }
-            }
-
-            if (-not $backupOk) {
-                if (-not (Test-Path $uncBackup)) { New-Item -ItemType Directory -Path $uncBackup -Force | Out-Null }
-                robocopy $uncTarget (Join-Path $uncBackup $backupName) /E /MT:$mt /R:1 /W:1 /NP /NFL /NDL /NJH /NJS | Out-Null
-                if ($LASTEXITCODE -ge 8) { throw "Backup failed (robocopy exit $LASTEXITCODE)" }
-                Q 'Backup' 'Backup done' "Backup completed via UNC (exit $LASTEXITCODE)"
-            }
-        } else {
-            Q 'Backup' 'No backup' 'Remote target folder does not exist - skipping backup'
-        }
-
-        # ---------- 2) Stop IIS (optional) ----------
+        # ---------- helper: stop/start IIS on the remote server ----------
         function Set-RemoteIIS {
             param($Action)   # 'stop' or 'start'
             # Preferred: run iisreset locally on the server via WinRM (hostname -> Kerberos)
@@ -406,17 +370,65 @@ $Worker = {
             return $null
         }
 
+        # ---------- 1) Stop IIS (optional) - BEFORE backup, so the backup is consistent ----------
         $iisStopped = $false
         if ($Cfg.StopIIS) {
             Q 'IIS' 'Stopping IIS...' 'Stopping IIS...'
             $via = Set-RemoteIIS 'stop'
-            if (-not $via) { throw 'Failed to stop IIS - aborting copy (target was NOT modified)' }
+            if (-not $via) { throw 'Failed to stop IIS - aborting (no backup, target was NOT modified)' }
             $iisStopped = $true
             Q 'IIS' 'IIS is DOWN' "IIS stopped (via $via) - site is now offline"
         }
 
-        # ---------- 3) Fast copy local -> remote ----------
         try {
+            # ---------- 2) Backup on the remote server ----------
+            if (Test-Path $uncTarget) {
+                Q 'Backup' 'Backing up...' "Starting backup -> $backupRel\$backupName"
+                $backupOk = $false
+
+                if ($Cfg.UseWinRM) {
+                    try {
+                        # Kerberos authentication requires a hostname, not an IP address
+                        $rc = Invoke-Command -ComputerName $Server.Name -ErrorAction Stop -ScriptBlock {
+                            param($src, $dst, $threads)
+                            $parent = Split-Path $dst -Parent
+                            if (-not (Test-Path $parent)) { New-Item -ItemType Directory -Path $parent -Force | Out-Null }
+                            robocopy $src $dst /E /MT:$threads /R:1 /W:1 /NP /NFL /NDL /NJH /NJS | Out-Null
+                            return $LASTEXITCODE
+                        } -ArgumentList $localTarget, (Join-Path $localBackup $backupName), $mt
+                        if ($rc -lt 8) {
+                            $backupOk = $true
+                            Q 'Backup' 'Backup done' "Backup completed locally on $($Server.Name) (WinRM disk-to-disk, exit $rc)"
+                        } else {
+                            Q 'Backup' 'Backing up (UNC)...' "Remote robocopy failed (exit $rc), falling back to UNC backup"
+                        }
+                    } catch {
+                        Q 'Backup' 'Backing up (UNC)...' "WinRM unavailable ($($_.Exception.Message.Trim())), falling back to UNC backup"
+                    }
+                }
+
+                if (-not $backupOk) {
+                    if (-not (Test-Path $uncBackup)) { New-Item -ItemType Directory -Path $uncBackup -Force | Out-Null }
+                    robocopy $uncTarget (Join-Path $uncBackup $backupName) /E /MT:$mt /R:1 /W:1 /NP /NFL /NDL /NJH /NJS | Out-Null
+                    if ($LASTEXITCODE -ge 8) { throw "Backup failed (robocopy exit $LASTEXITCODE)" }
+                    Q 'Backup' 'Backup done' "Backup completed via UNC (exit $LASTEXITCODE)"
+                }
+            } else {
+                Q 'Backup' 'No backup' 'Remote target folder does not exist - skipping backup'
+            }
+
+            # ---------- 3) Stop IIS again right before the copy ----------
+            # (safety net: monitoring / another admin may have started IIS back
+            #  while the backup was running - make sure it is really down)
+            if ($Cfg.StopIIS) {
+                Q 'IIS' 'Stopping IIS...' 'Re-verifying IIS is stopped before copy...'
+                $via = Set-RemoteIIS 'stop'
+                if (-not $via) { throw 'Failed to stop IIS before copy - aborting (backup exists, target was NOT modified)' }
+                $iisStopped = $true
+                Q 'IIS' 'IIS is DOWN' "IIS confirmed stopped (via $via) - starting copy"
+            }
+
+            # ---------- 4) Fast copy local -> remote ----------
             Q 'Copy' 'Copying...' "Copying $($Cfg.SourceFolder) -> $uncTarget (MT:$mt)"
             $sw = [System.Diagnostics.Stopwatch]::StartNew()
             $mode = if ($Cfg.MirrorMode) { '/MIR' } else { '/E' }
@@ -426,7 +438,7 @@ $Worker = {
             if ($rcCopy -ge 8) { throw "Copy failed (robocopy exit $rcCopy)" }
         }
         finally {
-            # ---------- 4) Start IIS again - even if the copy failed ----------
+            # ---------- 5) Start IIS again - even if the backup or copy failed ----------
             if ($iisStopped) {
                 Q 'IIS' 'Starting IIS...' 'Starting IIS...'
                 $via = Set-RemoteIIS 'start'
