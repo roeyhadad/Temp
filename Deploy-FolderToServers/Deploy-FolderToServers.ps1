@@ -1,5 +1,15 @@
 # =====================================================================
-#  Deploy-FolderToServers.ps1  -  v1.0.0
+#  Deploy-FolderToServers.ps1  -  v1.1.0
+#  ------------------------------------------------------------------
+#  v1.1.0 changelog:
+#   - Optional IIS stop before backup + re-verify before copy,
+#     guaranteed restart (finally) even on failure
+#   - Stop Server / Stop All buttons
+#   - Detailed per-phase status column (IIS is DOWN / Copying... etc.)
+#   - Live runtime column per server
+#   - Server description included in every log line
+#   - Daily log file (DeployTool_yyyyMMdd.log) next to the script
+#   - WinRM by hostname (Kerberos) with UNC fallback
 #  ------------------------------------------------------------------
 #  Copies a local folder to multiple remote servers (fast, robocopy /MT)
 #  Before each copy: backs up the remote target folder to d$\backup
@@ -108,7 +118,7 @@ $lblTitle.AutoSize  = $true
 $Form.Controls.Add($lblTitle)
 
 $lblVer           = New-Object System.Windows.Forms.Label
-$lblVer.Text      = 'v1.0.0'
+$lblVer.Text      = 'v1.1.0'
 $lblVer.ForeColor = $ClrGray
 $lblVer.Location  = New-Object System.Drawing.Point(420, 30)
 $lblVer.AutoSize  = $true
