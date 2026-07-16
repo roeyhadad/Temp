@@ -1,4 +1,4 @@
-﻿# =====================================================================
+# =====================================================================
 #  Deploy-FolderToServers.ps1  -  v1.0.0
 #  ------------------------------------------------------------------
 #  Copies a local folder to multiple remote servers (fast, robocopy /MT)
@@ -342,7 +342,8 @@ $Worker = {
 
             if ($Cfg.UseWinRM) {
                 try {
-                    $rc = Invoke-Command -ComputerName $ip -ErrorAction Stop -ScriptBlock {
+                    # Kerberos authentication requires a hostname, not an IP address
+                    $rc = Invoke-Command -ComputerName $Server.Name -ErrorAction Stop -ScriptBlock {
                         param($src, $dst, $threads)
                         $parent = Split-Path $dst -Parent
                         if (-not (Test-Path $parent)) { New-Item -ItemType Directory -Path $parent -Force | Out-Null }
@@ -351,7 +352,7 @@ $Worker = {
                     } -ArgumentList $localTarget, (Join-Path $localBackup $backupName), $mt
                     if ($rc -lt 8) {
                         $backupOk = $true
-                        Q 'Backup' "Backup completed on server (WinRM, local disk-to-disk, exit $rc)"
+                        Q 'Backup' "Backup completed locally on $($Server.Name) (WinRM disk-to-disk, exit $rc)"
                     } else {
                         Q 'Backup' "Remote robocopy failed (exit $rc), falling back to UNC backup"
                     }
