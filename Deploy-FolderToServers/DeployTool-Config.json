@@ -1,10 +1,11 @@
-﻿{
+{
   "SourceFolder": "C:\\Deploy\\wwwroot",
   "RemoteTargetFolder": "d$\\Webroot\\wwwroot",
   "BackupFolder": "d$\\backup",
-  "MaxParallel": 5,
+  "MaxParallel": 10,
   "RobocopyThreads": 32,
   "MirrorMode": false,
+  "StopIIS": false,
   "UseWinRM": true,
   "Servers": [
     { "Name": "Server1", "IP": "11.11", "Description": "Prod_Web01", "Checked": false },
