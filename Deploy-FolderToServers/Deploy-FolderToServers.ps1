@@ -30,6 +30,7 @@ if (-not (Test-Path $ConfigPath)) {
         MaxParallel        = 5
         RobocopyThreads    = 32
         MirrorMode         = $false     # $true = /MIR (deletes extra files on target!), $false = /E
+        StopIIS            = $false     # default state of the 'Stop IIS' checkbox
         UseWinRM           = $true      # backup runs locally on the remote server (much faster)
         Servers            = @(
             [ordered]@{ Name = 'NTAS102583A9F'; IP = '172.29.15.63'; Description = 'Kohav_Business_Prod_Web01'; Checked = $false }
@@ -246,18 +247,28 @@ $txtBak.Size     = New-Object System.Drawing.Size(560, 24)
 $txtBak.Text     = $Config.BackupFolder
 $Form.Controls.Add($txtBak)
 
+# --- Stop IIS option ---------------------------------------------------
+$chkIIS           = New-Object System.Windows.Forms.CheckBox
+$chkIIS.Text      = 'Stop IIS before copy (start again when finished)'
+$chkIIS.Font      = $FontBold
+$chkIIS.ForeColor = $ClrNavy
+$chkIIS.Location  = New-Object System.Drawing.Point(180, 380)
+$chkIIS.AutoSize  = $true
+$chkIIS.Checked   = [bool]$Config.StopIIS
+$Form.Controls.Add($chkIIS)
+
 # --- Log --------------------------------------------------------------
 $lblLog          = New-Object System.Windows.Forms.Label
 $lblLog.Text     = 'Log:'
 $lblLog.Font     = $FontBold
 $lblLog.ForeColor= $ClrNavy
-$lblLog.Location = New-Object System.Drawing.Point(30, 390)
+$lblLog.Location = New-Object System.Drawing.Point(30, 408)
 $lblLog.AutoSize = $true
 $Form.Controls.Add($lblLog)
 
 $rtbLog             = New-Object System.Windows.Forms.RichTextBox
-$rtbLog.Location    = New-Object System.Drawing.Point(30, 415)
-$rtbLog.Size        = New-Object System.Drawing.Size(820, 280)
+$rtbLog.Location    = New-Object System.Drawing.Point(30, 430)
+$rtbLog.Size        = New-Object System.Drawing.Size(820, 265)
 $rtbLog.BackColor   = [System.Drawing.Color]::Black
 $rtbLog.ForeColor   = [System.Drawing.Color]::Lime
 $rtbLog.Font        = $FontMono
@@ -302,6 +313,7 @@ function Save-Settings {
         MaxParallel        = [int]$Config.MaxParallel
         RobocopyThreads    = [int]$Config.RobocopyThreads
         MirrorMode         = [bool]$Config.MirrorMode
+        StopIIS            = [bool]$chkIIS.Checked
         UseWinRM           = [bool]$Config.UseWinRM
         Servers            = $servers
     }
@@ -371,14 +383,52 @@ $Worker = {
             Q 'Backup' 'Remote target folder does not exist - skipping backup'
         }
 
-        # ---------- 2) Fast copy local -> remote ----------
-        Q 'Copy' "Copying $($Cfg.SourceFolder) -> $uncTarget (MT:$mt)"
-        $sw = [System.Diagnostics.Stopwatch]::StartNew()
-        $mode = if ($Cfg.MirrorMode) { '/MIR' } else { '/E' }
-        robocopy $Cfg.SourceFolder $uncTarget $mode /MT:$mt /R:2 /W:2 /NP /NFL /NDL /NJH /NJS | Out-Null
-        $rcCopy = $LASTEXITCODE
-        $sw.Stop()
-        if ($rcCopy -ge 8) { throw "Copy failed (robocopy exit $rcCopy)" }
+        # ---------- 2) Stop IIS (optional) ----------
+        function Set-RemoteIIS {
+            param($Action)   # 'stop' or 'start'
+            # Preferred: run iisreset locally on the server via WinRM (hostname -> Kerberos)
+            try {
+                $rc = Invoke-Command -ComputerName $Server.Name -ErrorAction Stop -ScriptBlock {
+                    param($a)
+                    & iisreset "/$a" 2>&1 | Out-Null
+                    return $LASTEXITCODE
+                } -ArgumentList $Action
+                if ($rc -eq 0) { return 'WinRM' }
+            } catch { }
+            # Fallback: iisreset supports a remote computer name directly (RPC)
+            & iisreset $Server.Name "/$Action" 2>&1 | Out-Null
+            if ($LASTEXITCODE -eq 0) { return 'RPC' }
+            return $null
+        }
+
+        $iisStopped = $false
+        if ($Cfg.StopIIS) {
+            Q 'IIS' 'Stopping IIS...'
+            $via = Set-RemoteIIS 'stop'
+            if (-not $via) { throw 'Failed to stop IIS - aborting copy (target was NOT modified)' }
+            $iisStopped = $true
+            Q 'IIS' "IIS stopped (via $via)"
+        }
+
+        # ---------- 3) Fast copy local -> remote ----------
+        try {
+            Q 'Copy' "Copying $($Cfg.SourceFolder) -> $uncTarget (MT:$mt)"
+            $sw = [System.Diagnostics.Stopwatch]::StartNew()
+            $mode = if ($Cfg.MirrorMode) { '/MIR' } else { '/E' }
+            robocopy $Cfg.SourceFolder $uncTarget $mode /MT:$mt /R:2 /W:2 /NP /NFL /NDL /NJH /NJS | Out-Null
+            $rcCopy = $LASTEXITCODE
+            $sw.Stop()
+            if ($rcCopy -ge 8) { throw "Copy failed (robocopy exit $rcCopy)" }
+        }
+        finally {
+            # ---------- 4) Start IIS again - even if the copy failed ----------
+            if ($iisStopped) {
+                Q 'IIS' 'Starting IIS...'
+                $via = Set-RemoteIIS 'start'
+                if ($via) { Q 'IIS' "IIS started (via $via)" }
+                else      { Q 'Error' 'FAILED TO START IIS - start it manually on the server!' }
+            }
+        }
 
         Q 'Done' ("Finished successfully in {0:mm\:ss} (robocopy exit {1})" -f $sw.Elapsed, $rcCopy)
     }
@@ -400,6 +450,7 @@ $Timer.Add_Tick({
             'Done'   { [System.Drawing.Color]::LimeGreen }
             'Backup' { [System.Drawing.Color]::Yellow }
             'Copy'   { [System.Drawing.Color]::Cyan }
+            'IIS'    { [System.Drawing.Color]::Orange }
             default  { [System.Drawing.Color]::Lime }
         }
         Write-Log "[$($e.Server)] $($e.Message)" $color
@@ -440,6 +491,7 @@ $btnRun.Add_Click({
     }
 
     $confirmMsg = "לבצע גיבוי + העתקה ל-$($checked.Count) שרתים?"
+    if ($chkIIS.Checked) { $confirmMsg += "`n`nIIS ייעצר בכל שרת לפני ההעתקה ויופעל מחדש בסיום." }
     if ($Config.MirrorMode) { $confirmMsg += "`n`nשים לב: MirrorMode פעיל - קבצים עודפים ביעד יימחקו!" }
     $ans = [System.Windows.Forms.MessageBox]::Show($confirmMsg, 'Deploy Tool',
         [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Question)
@@ -456,6 +508,7 @@ $btnRun.Add_Click({
         BackupFolder       = $txtBak.Text
         RobocopyThreads    = [int]$Config.RobocopyThreads
         MirrorMode         = [bool]$Config.MirrorMode
+        StopIIS            = [bool]$chkIIS.Checked
         UseWinRM           = [bool]$Config.UseWinRM
     }
 
