@@ -286,11 +286,16 @@ function Write-Log {
 }
 
 # --- Bottom buttons ----------------------------------------------------
-$btnRun   = New-ColorButton 'Run Deploy'    30  715 160 36 $ClrBlue
-$btnClear = New-ColorButton 'Clear Log'     210 715 120 36 $ClrGray
-$btnSave  = New-ColorButton 'Save Settings' 350 715 130 36 $ClrGreen
-$btnClose = New-ColorButton 'Close'         740 715 110 36 $ClrRed
-$Form.Controls.AddRange(@($btnRun, $btnClear, $btnSave, $btnClose))
+$ClrOrange = [System.Drawing.Color]::FromArgb(211, 120, 0)
+$btnRun     = New-ColorButton 'Run Deploy'    30  715 130 36 $ClrBlue
+$btnStopSrv = New-ColorButton 'Stop Server'   170 715 115 36 $ClrOrange
+$btnStopAll = New-ColorButton 'Stop All'      295 715 100 36 $ClrRed
+$btnClear   = New-ColorButton 'Clear Log'     420 715 105 36 $ClrGray
+$btnSave    = New-ColorButton 'Save Settings' 535 715 125 36 $ClrGreen
+$btnClose   = New-ColorButton 'Close'         745 715 105 36 $ClrRed
+$btnStopSrv.Enabled = $false
+$btnStopAll.Enabled = $false
+$Form.Controls.AddRange(@($btnRun, $btnStopSrv, $btnStopAll, $btnClear, $btnSave, $btnClose))
 
 $btnClear.Add_Click({ $rtbLog.Clear() })
 $btnClose.Add_Click({ $Form.Close() })
@@ -328,9 +333,9 @@ $btnSave.Add_Click({ Save-Settings })
 $Worker = {
     param($Server, $Cfg, $Sync)
 
-    function Q { param($Status, $Msg)
+    function Q { param($Kind, $Status, $Msg)
         $Sync.LogQueue.Enqueue([pscustomobject]@{
-            Server = $Server.Name; Status = $Status; Message = $Msg
+            Server = $Server.Name; Kind = $Kind; Status = $Status; Message = $Msg
         })
     }
 
@@ -349,7 +354,7 @@ $Worker = {
 
         # ---------- 1) Backup on the remote server ----------
         if (Test-Path $uncTarget) {
-            Q 'Backup' "Starting backup -> $backupRel\$backupName"
+            Q 'Backup' 'Backing up...' "Starting backup -> $backupRel\$backupName"
             $backupOk = $false
 
             if ($Cfg.UseWinRM) {
@@ -364,12 +369,12 @@ $Worker = {
                     } -ArgumentList $localTarget, (Join-Path $localBackup $backupName), $mt
                     if ($rc -lt 8) {
                         $backupOk = $true
-                        Q 'Backup' "Backup completed locally on $($Server.Name) (WinRM disk-to-disk, exit $rc)"
+                        Q 'Backup' 'Backup done' "Backup completed locally on $($Server.Name) (WinRM disk-to-disk, exit $rc)"
                     } else {
-                        Q 'Backup' "Remote robocopy failed (exit $rc), falling back to UNC backup"
+                        Q 'Backup' 'Backing up (UNC)...' "Remote robocopy failed (exit $rc), falling back to UNC backup"
                     }
                 } catch {
-                    Q 'Backup' "WinRM unavailable ($($_.Exception.Message.Trim())), falling back to UNC backup"
+                    Q 'Backup' 'Backing up (UNC)...' "WinRM unavailable ($($_.Exception.Message.Trim())), falling back to UNC backup"
                 }
             }
 
@@ -377,10 +382,10 @@ $Worker = {
                 if (-not (Test-Path $uncBackup)) { New-Item -ItemType Directory -Path $uncBackup -Force | Out-Null }
                 robocopy $uncTarget (Join-Path $uncBackup $backupName) /E /MT:$mt /R:1 /W:1 /NP /NFL /NDL /NJH /NJS | Out-Null
                 if ($LASTEXITCODE -ge 8) { throw "Backup failed (robocopy exit $LASTEXITCODE)" }
-                Q 'Backup' "Backup completed via UNC (exit $LASTEXITCODE)"
+                Q 'Backup' 'Backup done' "Backup completed via UNC (exit $LASTEXITCODE)"
             }
         } else {
-            Q 'Backup' 'Remote target folder does not exist - skipping backup'
+            Q 'Backup' 'No backup' 'Remote target folder does not exist - skipping backup'
         }
 
         # ---------- 2) Stop IIS (optional) ----------
@@ -403,16 +408,16 @@ $Worker = {
 
         $iisStopped = $false
         if ($Cfg.StopIIS) {
-            Q 'IIS' 'Stopping IIS...'
+            Q 'IIS' 'Stopping IIS...' 'Stopping IIS...'
             $via = Set-RemoteIIS 'stop'
             if (-not $via) { throw 'Failed to stop IIS - aborting copy (target was NOT modified)' }
             $iisStopped = $true
-            Q 'IIS' "IIS stopped (via $via)"
+            Q 'IIS' 'IIS is DOWN' "IIS stopped (via $via) - site is now offline"
         }
 
         # ---------- 3) Fast copy local -> remote ----------
         try {
-            Q 'Copy' "Copying $($Cfg.SourceFolder) -> $uncTarget (MT:$mt)"
+            Q 'Copy' 'Copying...' "Copying $($Cfg.SourceFolder) -> $uncTarget (MT:$mt)"
             $sw = [System.Diagnostics.Stopwatch]::StartNew()
             $mode = if ($Cfg.MirrorMode) { '/MIR' } else { '/E' }
             robocopy $Cfg.SourceFolder $uncTarget $mode /MT:$mt /R:2 /W:2 /NP /NFL /NDL /NJH /NJS | Out-Null
@@ -423,17 +428,17 @@ $Worker = {
         finally {
             # ---------- 4) Start IIS again - even if the copy failed ----------
             if ($iisStopped) {
-                Q 'IIS' 'Starting IIS...'
+                Q 'IIS' 'Starting IIS...' 'Starting IIS...'
                 $via = Set-RemoteIIS 'start'
-                if ($via) { Q 'IIS' "IIS started (via $via)" }
-                else      { Q 'Error' 'FAILED TO START IIS - start it manually on the server!' }
+                if ($via) { Q 'IIS' 'IIS is UP' "IIS started (via $via) - site is back online" }
+                else      { Q 'Error' 'IIS STILL DOWN!' 'FAILED TO START IIS - start it manually on the server!' }
             }
         }
 
-        Q 'Done' ("Finished successfully in {0:mm\:ss} (robocopy exit {1})" -f $sw.Elapsed, $rcCopy)
+        Q 'Done' 'Done' ("Finished successfully in {0:mm\:ss} (robocopy exit {1})" -f $sw.Elapsed, $rcCopy)
     }
     catch {
-        Q 'Error' $_.Exception.Message
+        Q 'Error' 'Error' $_.Exception.Message
     }
 }
 
@@ -445,7 +450,7 @@ $Timer.Interval = 300
 $Timer.Add_Tick({
     while ($Sync.LogQueue.Count -gt 0) {
         $e = $Sync.LogQueue.Dequeue()
-        $color = switch ($e.Status) {
+        $color = switch ($e.Kind) {
             'Error'  { [System.Drawing.Color]::Red }
             'Done'   { [System.Drawing.Color]::LimeGreen }
             'Backup' { [System.Drawing.Color]::Yellow }
@@ -468,8 +473,10 @@ $Timer.Add_Tick({
         $script:Jobs = @()
         if ($script:RunspacePool) { $script:RunspacePool.Close(); $script:RunspacePool.Dispose(); $script:RunspacePool = $null }
         Write-Log '=== All servers finished ===' ([System.Drawing.Color]::White)
-        $btnRun.Enabled = $true
-        $btnRun.Text    = 'Run Deploy'
+        $btnRun.Enabled     = $true
+        $btnRun.Text        = 'Run Deploy'
+        $btnStopSrv.Enabled = $false
+        $btnStopAll.Enabled = $false
     }
 })
 $Timer.Start()
@@ -528,8 +535,52 @@ $btnRun.Add_Click({
         $ps = [powershell]::Create()
         $ps.RunspacePool = $script:RunspacePool
         [void]$ps.AddScript($Worker).AddArgument($srv).AddArgument($cfgRun).AddArgument($Sync)
-        $script:Jobs += [pscustomobject]@{ PS = $ps; Handle = $ps.BeginInvoke() }
+        $script:Jobs += [pscustomobject]@{ PS = $ps; Handle = $ps.BeginInvoke(); Server = $srv.Name; Stopped = $false }
     }
+    $btnStopSrv.Enabled = $true
+    $btnStopAll.Enabled = $true
+})
+
+# ---------------------------------------------------------------------
+#  Stop buttons
+# ---------------------------------------------------------------------
+function Stop-Job-ForServer {
+    param($Job)
+    if ($Job.Stopped -or $Job.Handle.IsCompleted) { return }
+    $Job.Stopped = $true
+    try { [void]$Job.PS.BeginStop($null, $null) } catch {}
+    foreach ($i in $lvServers.Items) {
+        if ($i.SubItems[0].Text -eq $Job.Server) { $i.SubItems[3].Text = 'Cancelled' }
+    }
+    Write-Log "[$($Job.Server)] Cancelled by user" ([System.Drawing.Color]::Orange)
+    if ($chkIIS.Checked) {
+        Write-Log "[$($Job.Server)] WARNING: if IIS was already stopped on this server, verify it and start it manually (iisreset $($Job.Server) /start)" ([System.Drawing.Color]::Red)
+    }
+}
+
+$btnStopSrv.Add_Click({
+    if ($lvServers.SelectedItems.Count -eq 0) {
+        [System.Windows.Forms.MessageBox]::Show('סמן שורה של שרת ברשימה (קליק על השורה, לא על ה-checkbox) ואז לחץ שוב', 'Deploy Tool',
+            [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
+        return
+    }
+    $name = $lvServers.SelectedItems[0].SubItems[0].Text
+    $job  = $script:Jobs | Where-Object { $_.Server -eq $name } | Select-Object -First 1
+    if (-not $job) {
+        Write-Log "[$name] No running task for this server" ([System.Drawing.Color]::Gray)
+        return
+    }
+    Stop-Job-ForServer $job
+})
+
+$btnStopAll.Add_Click({
+    $running = @($script:Jobs | Where-Object { -not $_.Handle.IsCompleted -and -not $_.Stopped })
+    if ($running.Count -eq 0) { return }
+    $ans = [System.Windows.Forms.MessageBox]::Show("לעצור את כל התהליכים ($($running.Count) פעילים)?", 'Deploy Tool',
+        [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Warning)
+    if ($ans -ne 'Yes') { return }
+    Write-Log '=== STOP ALL requested by user ===' ([System.Drawing.Color]::Red)
+    foreach ($j in $running) { Stop-Job-ForServer $j }
 })
 
 # ---------------------------------------------------------------------
