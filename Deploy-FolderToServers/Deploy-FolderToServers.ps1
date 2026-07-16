@@ -341,9 +341,10 @@ $btnSave.Add_Click({ Save-Settings })
 $Worker = {
     param($Server, $Cfg, $Sync)
 
+    $srvLabel = if ($Server.Description) { "$($Server.Name) | $($Server.Description)" } else { $Server.Name }
     function Q { param($Kind, $Status, $Msg)
         $Sync.LogQueue.Enqueue([pscustomobject]@{
-            Server = $Server.Name; Kind = $Kind; Status = $Status; Message = $Msg
+            Server = $Server.Name; Label = $srvLabel; Kind = $Kind; Status = $Status; Message = $Msg
         })
     }
 
@@ -478,7 +479,7 @@ $Timer.Add_Tick({
             'IIS'    { [System.Drawing.Color]::Orange }
             default  { [System.Drawing.Color]::Lime }
         }
-        Write-Log "[$($e.Server)] $($e.Message)" $color
+        Write-Log "[$($e.Label)] $($e.Message)" $color
 
         foreach ($i in $lvServers.Items) {
             if ($i.SubItems[0].Text -eq $e.Server) { $i.SubItems[3].Text = $e.Status }
@@ -558,8 +559,9 @@ $btnRun.Add_Click({
 
     foreach ($item in $checked) {
         $srv = [pscustomobject]@{
-            Name = $item.SubItems[0].Text
-            IP   = $item.SubItems[1].Text
+            Name        = $item.SubItems[0].Text
+            IP          = $item.SubItems[1].Text
+            Description = $item.SubItems[2].Text
         }
         $item.SubItems[3].Text = 'Queued'
 
@@ -580,12 +582,14 @@ function Stop-Job-ForServer {
     if ($Job.Stopped -or $Job.Handle.IsCompleted) { return }
     $Job.Stopped = $true
     try { [void]$Job.PS.BeginStop($null, $null) } catch {}
+    $desc = ''
     foreach ($i in $lvServers.Items) {
-        if ($i.SubItems[0].Text -eq $Job.Server) { $i.SubItems[3].Text = 'Cancelled' }
+        if ($i.SubItems[0].Text -eq $Job.Server) { $i.SubItems[3].Text = 'Cancelled'; $desc = $i.SubItems[2].Text }
     }
-    Write-Log "[$($Job.Server)] Cancelled by user" ([System.Drawing.Color]::Orange)
+    $label = if ($desc) { "$($Job.Server) | $desc" } else { $Job.Server }
+    Write-Log "[$label] Cancelled by user" ([System.Drawing.Color]::Orange)
     if ($chkIIS.Checked) {
-        Write-Log "[$($Job.Server)] WARNING: if IIS was already stopped on this server, verify it and start it manually (iisreset $($Job.Server) /start)" ([System.Drawing.Color]::Red)
+        Write-Log "[$label] WARNING: if IIS was already stopped on this server, verify it and start it manually (iisreset $($Job.Server) /start)" ([System.Drawing.Color]::Red)
     }
 }
 
