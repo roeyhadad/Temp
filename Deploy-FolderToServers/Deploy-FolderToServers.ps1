@@ -279,6 +279,21 @@ $lblLog.Location = New-Object System.Drawing.Point(30, 408)
 $lblLog.AutoSize = $true
 $Form.Controls.Add($lblLog)
 
+$btnOpenLog = New-ColorButton 'Open Log' 750 402 100 24 $ClrGray
+$btnOpenLog.Add_Click({
+    if (-not (Test-Path $LogPath)) {
+        Write-Log "Log file does not exist yet: $LogPath" ([System.Drawing.Color]::Gray)
+        return
+    }
+    $npp = @(
+        "$env:ProgramFiles\Notepad++\notepad++.exe",
+        "${env:ProgramFiles(x86)}\Notepad++\notepad++.exe"
+    ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+    if ($npp) { Start-Process -FilePath $npp -ArgumentList "`"$LogPath`"" }
+    else      { Start-Process -FilePath 'notepad.exe' -ArgumentList "`"$LogPath`"" }
+})
+$Form.Controls.Add($btnOpenLog)
+
 $rtbLog             = New-Object System.Windows.Forms.RichTextBox
 $rtbLog.Location    = New-Object System.Drawing.Point(30, 430)
 $rtbLog.Size        = New-Object System.Drawing.Size(820, 265)
